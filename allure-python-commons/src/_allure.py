@@ -1,3 +1,4 @@
+import inspect
 from functools import wraps
 from typing import Any, Callable, TypeVar
 
@@ -182,16 +183,35 @@ class StepContext:
         plugin_manager.hook.stop_step(uuid=self.uuid, title=self.title, exc_type=exc_type, exc_val=exc_val,
                                       exc_tb=exc_tb)
 
-    def __call__(self, func: _TFunc) -> _TFunc:
-        @wraps(func)
-        def impl(*a, **kw):
-            __tracebackhide__ = True
-            params = func_parameters(func, *a, **kw)
-            args = list(map(lambda x: represent(x), a))
-            with StepContext(self.title.format(*args, **params), params):
-                return func(*a, **kw)
+    async def __aenter__(self):
+        self.__enter__()
+        return self
 
-        return impl
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        self.__exit__(exc_type, exc_val, exc_tb)
+
+    def _create_context(self, func, *args, **kwargs):
+        """Helper method to create context and format title."""
+        params = func_parameters(func, *args, **kwargs)
+        formatted_args = list(map(lambda x: represent(x), args))
+        title = self.title.format(*formatted_args, **params)
+        return StepContext(title, params)
+
+    def __call__(self, func: _TFunc) -> _TFunc:
+        if inspect.iscoroutinefunction(func):
+            @wraps(func)
+            async def async_impl(*args, **kwargs):
+                __tracebackhide__ = True
+                async with self._create_context(func, *args, **kwargs):
+                    return await func(*args, **kwargs)
+            return async_impl
+        else:
+            @wraps(func)
+            def impl(*args, **kwargs):
+                __tracebackhide__ = True
+                with self._create_context(func, *args, **kwargs):
+                    return func(*args, **kwargs)
+            return impl
 
 
 class Attach:
